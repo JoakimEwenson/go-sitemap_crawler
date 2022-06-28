@@ -41,7 +41,7 @@ type CrawlResponse struct {
 }
 
 // Temporary entry point if no arguments given
-var entrypoint string = "http://10.0.1.10/projekt/wordpress_polstjarnan/?tsf-sitemap=base"
+var entrypoint string = "http://127.0.0.1/sitemap.xml"
 
 // Set a maximum of concurrent jobs
 const MAX_CONCURRENT_JOBS = 100
