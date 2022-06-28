@@ -118,7 +118,7 @@ func checkUrlStatus(links []Link) {
 			log.Println(err)
 		}
 
-		req.Header.Set("User-Agent", "Ewenson Link Crawler/1.0")
+		req.Header.Set("User-Agent", "Golang Link Crawler/1.0")
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, input Link) {
 			defer wg.Done()
