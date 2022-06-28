@@ -46,6 +46,9 @@ var entrypoint string = "http://127.0.0.1/sitemap.xml"
 // Set a maximum of concurrent jobs
 const MAX_CONCURRENT_JOBS = 100
 
+// Set constant for User Agent
+const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
+
 // Init empty slice of URLs to verify
 var url_list []Link
 
@@ -54,6 +57,7 @@ var crawled_urls []CrawlResponse
 
 var num_errors int = 0
 var url_errors []CrawlResponse
+var request_errors []error
 
 // Main function for executing the program
 func main() {
@@ -101,6 +105,9 @@ func main() {
 		}
 	}
 	fmt.Println("\nA total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
+	for _, err := range request_errors {
+		fmt.Println(err)
+	}
 	fmt.Println("\nTotal execution time:", time.Since(start))
 }
 
@@ -110,26 +117,31 @@ func checkUrlStatus(links []Link) {
 	status := 999
 	client := &http.Client{Timeout: 60 * time.Second}
 
+	// Slice for links with errors
+	var retry_urls []Link
+
 	// Wait group init
 	var wg sync.WaitGroup
 	for _, link := range links {
-		req, err := http.NewRequest("HEAD", link.url, nil)
-		if err != nil {
-			log.Println(err)
-		}
-
-		req.Header.Set("User-Agent", "Golang Link Crawler/1.0")
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, input Link) {
+			req, err := http.NewRequest("HEAD", input.url, nil)
+			if err != nil {
+				log.Println(err)
+			}
+
+			req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
 			defer wg.Done()
 			resp, err := client.Do(req)
 			if err != nil {
+				retry_urls = append(retry_urls, input)
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 					status = 408
 				}
 				if os.IsTimeout(err) {
 					status = 408
 				}
+				request_errors = append(request_errors, err)
 				log.Println(err)
 			}
 			if err == nil {
@@ -140,11 +152,51 @@ func checkUrlStatus(links []Link) {
 			if status >= 200 && status <= 299 {
 				is_ok = true
 			}
-			fmt.Printf("HTTP %d for %s\n", status, input.url)
+			fmt.Printf("HEAD response %d for %s\n", status, input.url)
 			crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
 		}(&wg, link)
 	}
 	wg.Wait()
+
+	// Retry with GET instead of head if retry_urls is populated
+	if len(retry_urls) > 0 {
+		// Wait group init
+		var wg2 sync.WaitGroup
+		for _, link := range retry_urls {
+			wg2.Add(1)
+			go func(wg2 *sync.WaitGroup, input Link) {
+				req, err := http.NewRequest("GET", input.url, nil)
+				if err != nil {
+					log.Println(err)
+				}
+
+				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
+				defer wg2.Done()
+				resp, err := client.Do(req)
+				if err != nil {
+					if err, ok := err.(net.Error); ok && err.Timeout() {
+						status = 408
+					}
+					if os.IsTimeout(err) {
+						status = 408
+					}
+					request_errors = append(request_errors, err)
+					log.Println(err)
+				}
+				if err == nil {
+					status = resp.StatusCode
+					defer resp.Body.Close()
+				}
+				is_ok := false
+				if status >= 200 && status <= 299 {
+					is_ok = true
+				}
+				fmt.Printf("GET response %d for %s\n", status, input.url)
+				crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
+			}(&wg2, link)
+		}
+		wg2.Wait()
+	}
 	// Check number of errors
 	for _, item := range crawled_urls {
 		if !item.is_ok {
@@ -172,7 +224,7 @@ func getPageLinks(input_url string) []Link {
 	parsed_entrypoint, _ := url.ParseRequestURI(input_url)
 	// Start up Colly
 	c := colly.NewCollector()
-	c.Limit(&colly.LimitRule{RandomDelay: 1 * time.Second})
+	c.Limit(&colly.LimitRule{RandomDelay: 3 * time.Second})
 
 	c.OnHTML("a[href]", func(h *colly.HTMLElement) {
 		link_url := h.Attr("href")
@@ -229,7 +281,7 @@ func getXML(entrypoint string) (*http.Response, error) {
 	if err != nil {
 		log.Println(err)
 	}
-	req.Header.Set("User-Agent", "Ewenson Link Crawler/1.0")
+	req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
 	res, err := client.Do(req)
 	if err != nil {
 		log.Println(err)
