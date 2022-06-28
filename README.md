@@ -14,3 +14,6 @@ Have you ever come across a 404 link on some blog? Maybee want to verify that al
 3. Then it reads that file content, try to find all `<a href="">` tags and fetch the URL inside. 
 4. After this, it will verify that it is a valid URL and make a HEAD-request for that URL. At the same time, it will also save that URL in memory to make sure that unique URLs don't get multiple requests.
 5. It will then get the HTTP status code from that request and save those with a 3xx, 4xx or 5xx responses for displaying and log output later.
+
+## Known issues
+This script needs some limits. Running it on large sitemaps will probabably cause errors due to too many goroutines launching. This is on the to do list for a rainy day. 
