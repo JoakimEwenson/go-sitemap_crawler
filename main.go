@@ -125,7 +125,7 @@ func checkUrlStatus(links []Link) {
 	for _, link := range links {
 		wg.Add(1)
 		go func(wg *sync.WaitGroup, input Link) {
-			req, err := http.NewRequest("HEAD", input.url, nil)
+			req, err := http.NewRequest(http.MethodHead, input.url, nil)
 			if err != nil {
 				log.Println(err)
 			}
@@ -165,7 +165,7 @@ func checkUrlStatus(links []Link) {
 		for _, link := range retry_urls {
 			wg2.Add(1)
 			go func(wg2 *sync.WaitGroup, input Link) {
-				req, err := http.NewRequest("GET", input.url, nil)
+				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
 					log.Println(err)
 				}
@@ -241,7 +241,7 @@ func getPageLinks(input_url string) []Link {
 			trimmed_url2 := strings.Split(trimmed_url1[0], "&")
 			// Check if URL is in list already
 			is_unique := isUniqueUrl(trimmed_url2[0])
-			if is_unique && parsed_url.Scheme != "mailto" && parsed_url.Scheme != "tel" && parsed_url.Scheme != "irc" {
+			if is_unique && parsed_url.Scheme != "mailto" && parsed_url.Scheme != "tel" && parsed_url.Scheme != "irc" && parsed_url.Scheme != "javascript" {
 				// Append link to slice that will be returned from function
 				url_list = append(url_list, Link{origin_url: input_url, origin_text: link_text, url: trimmed_url2[0]})
 			}
@@ -277,7 +277,7 @@ func getSitemap(entrypoint string) ([]string, error) {
 func getXML(entrypoint string) (*http.Response, error) {
 	// Go fetch!
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", entrypoint, nil)
+	req, err := http.NewRequest(http.MethodGet, entrypoint, nil)
 	if err != nil {
 		log.Println(err)
 	}
