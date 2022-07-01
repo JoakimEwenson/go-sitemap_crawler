@@ -118,7 +118,7 @@ func main() {
 	}
 	fmt.Println()
 	if len(request_errors) > 0 {
-		fmt.Println("Errors raised while checking URLs")
+		fmt.Println("\nErrors raised while checking URLs")
 		for _, err := range request_errors {
 			fmt.Println(err)
 		}
