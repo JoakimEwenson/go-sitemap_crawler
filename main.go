@@ -9,10 +9,10 @@ package main
 import (
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,8 +38,8 @@ type CrawlResponse struct {
 var entrypoint string = "http://127.0.0.1/sitemap.xml"
 
 // Set a maximum of concurrent jobs
-const MAX_CONCURRENT_SCRAPES = 5
-const MAX_CONCURRENT_URLCHECKS = 10
+const MAX_CONCURRENT_SCRAPES = 10
+const MAX_CONCURRENT_URLCHECKS = 25
 
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
@@ -65,6 +65,19 @@ func main() {
 	}
 	// Init start time for execution time calc
 	start := time.Now()
+	timestamp := start.Unix()
+
+	// Parse entry point for base url
+	parsed_entrypoint, _ := url.ParseRequestURI(entrypoint)
+
+	// Set up file for log
+	file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
+	file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening file: %v\n", err)
+	}
+	defer file.Close()
+	log.SetOutput(file)
 
 	// Get sitemap content
 	crawl_urls, err := getSitemap(entrypoint)
@@ -94,17 +107,22 @@ func main() {
 
 	// Output at end of script
 	fmt.Println()
+	// Check if errors exists and output them to log file
+	if num_errors > 0 || len(request_errors) > 0 {
+		fmt.Printf("\nErrors found. Check logfile (%v) for results.", file_name)
+	}
 	if num_errors > 0 {
-		fmt.Println("\nErrors found:")
 		for _, item := range url_errors {
-			fmt.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
+			log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
 		}
 	}
-	fmt.Println("\nA total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
 	fmt.Println()
-	for _, err := range request_errors {
-		fmt.Println(err)
+	if len(request_errors) > 0 {
+		for _, err := range request_errors {
+			log.Println(err)
+		}
 	}
+	fmt.Println("A total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
 	fmt.Println("\nTotal execution time:", time.Since(start))
 }
 
@@ -131,12 +149,6 @@ func checkUrlStatus(links []Link) {
 			resp, err := client.Do(req)
 			if err != nil {
 				retry_urls = append(retry_urls, input)
-				if err, ok := err.(net.Error); ok && err.Timeout() {
-					status = 408
-				}
-				if os.IsTimeout(err) {
-					status = 408
-				}
 				request_errors = append(request_errors, err)
 				log.Println(err)
 			}
@@ -233,7 +245,7 @@ func getPageLinks(input_url string) []Link {
 			trimmed_url2 := strings.Split(trimmed_url1[0], "&")
 			// Check if URL is in list already
 			is_unique := isUniqueUrl(trimmed_url2[0])
-			if is_unique && parsed_url.Scheme != "mailto" && parsed_url.Scheme != "tel" && parsed_url.Scheme != "irc" && parsed_url.Scheme != "javascript" {
+			if is_unique && parsed_url.Scheme != "mailto" && parsed_url.Scheme != "tel" && parsed_url.Scheme != "irc" && parsed_url.Scheme != "javascript" && parsed_url.Scheme != "skype" {
 				// Append link to slice that will be returned from function
 				url_list = append(url_list, Link{origin_url: input_url, origin_text: link_text, url: trimmed_url2[0]})
 			}
