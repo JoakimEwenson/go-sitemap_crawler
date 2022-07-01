@@ -92,7 +92,7 @@ func main() {
 
 	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
 	var user_continue string
-	fmt.Println("Continue verifying URLs? (y/n)")
+	fmt.Print("Continue verifying URLs? (y/n) ")
 	fmt.Scan(&user_continue)
 	if strings.ToLower(user_continue) != "y" {
 		os.Exit(1)
@@ -101,6 +101,8 @@ func main() {
 
 	// Check all links from all pages
 	checkUrlStatus(links)
+
+	time.Sleep(time.Second * 3)
 
 	// Output request errors at end of script
 	if num_errors > 0 || len(request_errors) > 0 {
@@ -130,7 +132,6 @@ func main() {
 		}
 	}
 	// End output
-	time.Sleep(time.Second)
 	fmt.Println("A total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
 	fmt.Println("\nTotal execution time:", time.Since(start))
 }
@@ -151,7 +152,7 @@ func checkUrlStatus(links []Link) {
 			defer func() { <-queue }()
 			req, err := http.NewRequest(http.MethodHead, input.url, nil)
 			if err != nil {
-				log.Println(err)
+				fmt.Println(err)
 			}
 
 			req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
@@ -159,7 +160,7 @@ func checkUrlStatus(links []Link) {
 			if err != nil {
 				retry_urls = append(retry_urls, input)
 				request_errors = append(request_errors, err)
-				log.Println(err)
+				fmt.Println(err)
 			}
 			if err == nil {
 				status = resp.StatusCode
@@ -185,14 +186,14 @@ func checkUrlStatus(links []Link) {
 				defer func() { <-queue }()
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
-					log.Println(err)
+					fmt.Println(err)
 				}
 
 				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
 				resp, err := client.Do(req)
 				if err != nil {
 					request_errors = append(request_errors, err)
-					log.Println(err)
+					fmt.Println(err)
 				}
 				if err == nil {
 					defer resp.Body.Close()
@@ -275,14 +276,13 @@ func getPageLinks(input_url string) []Link {
 func getSitemap(entrypoint string) ([]string, error) {
 	res, err := getXML(entrypoint)
 	if err != nil {
-		log.Println(err)
+		fmt.Println(err)
 		return nil, err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
-		log.Println(err)
-		return nil, err
+		panic(err)
 	}
 	return parseSitemap(*doc), nil
 }
@@ -292,12 +292,12 @@ func getXML(entrypoint string) (*http.Response, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, entrypoint, nil)
 	if err != nil {
-		log.Println(err)
+		fmt.Println(err)
 	}
 	req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
 	res, err := client.Do(req)
 	if err != nil {
-		log.Println(err)
+		fmt.Println(err)
 		return nil, err
 	}
 
@@ -328,7 +328,7 @@ func parseSitemap(doc goquery.Document) []string {
 				defer func() { <-queue }()
 				result, err := getSitemap(entrypoint)
 				if err != nil {
-					log.Println(err)
+					fmt.Println(err)
 				}
 				pages = append(pages, result...)
 			}(entrypoint)
@@ -341,7 +341,6 @@ func parseSitemap(doc goquery.Document) []string {
 		pages := parseUrlset(doc)
 		return pages
 	} else {
-		log.Fatal("Nothing found")
-		return nil
+		panic("Nothing found")
 	}
 }
