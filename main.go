@@ -70,15 +70,6 @@ func main() {
 	// Parse entry point for base url
 	parsed_entrypoint, _ := url.ParseRequestURI(entrypoint)
 
-	// Set up file for log
-	file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
-	file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("Error opening file: %v\n", err)
-	}
-	defer file.Close()
-	log.SetOutput(file)
-
 	// Get sitemap content
 	crawl_urls, err := getSitemap(entrypoint)
 	if err != nil {
@@ -100,28 +91,46 @@ func main() {
 	}
 
 	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
+	var user_continue string
+	fmt.Println("Continue verifying URLs? (y/n)")
+	fmt.Scan(&user_continue)
+	if strings.ToLower(user_continue) != "y" {
+		os.Exit(1)
+	}
 	fmt.Println()
 
 	// Check all links from all pages
 	checkUrlStatus(links)
 
-	// Output at end of script
+	// Output request errors at end of script
+	if num_errors > 0 || len(request_errors) > 0 {
+		// Set up file for log
+		file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
+		file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("Error opening file: %v\n", err)
+		}
+		defer file.Close()
+		log.SetOutput(file)
+		fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
+	}
+	fmt.Println()
+	if len(request_errors) > 0 {
+		fmt.Println("Errors raised while checking URLs")
+		for _, err := range request_errors {
+			fmt.Println(err)
+		}
+	}
+	// Output HTTP errors
 	fmt.Println()
 	// Check if errors exists and output them to log file
-	if num_errors > 0 || len(request_errors) > 0 {
-		fmt.Printf("\nErrors found. Check logfile (%v) for results.", file_name)
-	}
 	if num_errors > 0 {
 		for _, item := range url_errors {
 			log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
 		}
 	}
-	fmt.Println()
-	if len(request_errors) > 0 {
-		for _, err := range request_errors {
-			log.Println(err)
-		}
-	}
+	// End output
+	time.Sleep(time.Second)
 	fmt.Println("A total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
 	fmt.Println("\nTotal execution time:", time.Since(start))
 }
