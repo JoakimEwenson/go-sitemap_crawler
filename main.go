@@ -14,17 +14,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gocolly/colly"
 )
-
-// type Sitemap struct {
-// 	origin string
-// 	urls   []string
-// }
 
 type Link struct {
 	origin_url  string
@@ -44,7 +38,8 @@ type CrawlResponse struct {
 var entrypoint string = "http://127.0.0.1/sitemap.xml"
 
 // Set a maximum of concurrent jobs
-const MAX_CONCURRENT_JOBS = 100
+const MAX_CONCURRENT_SCRAPES = 5
+const MAX_CONCURRENT_URLCHECKS = 10
 
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
@@ -77,18 +72,19 @@ func main() {
 		log.Println(err)
 	}
 
-	// Wait group init
-	var wg sync.WaitGroup
 	var links []Link
+	queue := make(chan bool, MAX_CONCURRENT_SCRAPES)
 	for _, crawl_url := range crawl_urls {
-		wg.Add(1)
-		go func(wg *sync.WaitGroup, crawl_url string) {
-			defer wg.Done()
+		queue <- true
+		go func(crawl_url string) {
+			defer func() { <-queue }()
 			// Get all links in page
 			links = getPageLinks(crawl_url)
-		}(&wg, crawl_url)
+		}(crawl_url)
 	}
-	wg.Wait()
+	for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+		queue <- true
+	}
 
 	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
 	fmt.Println()
@@ -105,6 +101,7 @@ func main() {
 		}
 	}
 	fmt.Println("\nA total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
+	fmt.Println()
 	for _, err := range request_errors {
 		fmt.Println(err)
 	}
@@ -114,24 +111,23 @@ func main() {
 // Function for making a HEAD call and return status code
 func checkUrlStatus(links []Link) {
 	// Init default return value
-	status := 999
-	client := &http.Client{Timeout: 60 * time.Second}
+	status := 0
+	client := &http.Client{Timeout: 10 * time.Second}
 
 	// Slice for links with errors
 	var retry_urls []Link
 
-	// Wait group init
-	var wg sync.WaitGroup
+	queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
 	for _, link := range links {
-		wg.Add(1)
-		go func(wg *sync.WaitGroup, input Link) {
+		queue <- true
+		go func(input Link) {
+			defer func() { <-queue }()
 			req, err := http.NewRequest(http.MethodHead, input.url, nil)
 			if err != nil {
 				log.Println(err)
 			}
 
 			req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
-			defer wg.Done()
 			resp, err := client.Do(req)
 			if err != nil {
 				retry_urls = append(retry_urls, input)
@@ -154,38 +150,32 @@ func checkUrlStatus(links []Link) {
 			}
 			fmt.Printf("HEAD response %d for %s\n", status, input.url)
 			crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
-		}(&wg, link)
+		}(link)
 	}
-	wg.Wait()
+	for i := 0; i < MAX_CONCURRENT_URLCHECKS; i++ {
+		queue <- true
+	}
 
 	// Retry with GET instead of head if retry_urls is populated
 	if len(retry_urls) > 0 {
-		// Wait group init
-		var wg2 sync.WaitGroup
+		queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
 		for _, link := range retry_urls {
-			wg2.Add(1)
-			go func(wg2 *sync.WaitGroup, input Link) {
+			go func(input Link) {
+				defer func() { <-queue }()
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
 					log.Println(err)
 				}
 
 				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
-				defer wg2.Done()
 				resp, err := client.Do(req)
 				if err != nil {
-					if err, ok := err.(net.Error); ok && err.Timeout() {
-						status = 408
-					}
-					if os.IsTimeout(err) {
-						status = 408
-					}
 					request_errors = append(request_errors, err)
 					log.Println(err)
 				}
 				if err == nil {
-					status = resp.StatusCode
 					defer resp.Body.Close()
+					status = resp.StatusCode
 				}
 				is_ok := false
 				if status >= 200 && status <= 299 {
@@ -193,9 +183,11 @@ func checkUrlStatus(links []Link) {
 				}
 				fmt.Printf("GET response %d for %s\n", status, input.url)
 				crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
-			}(&wg2, link)
+			}(link)
 		}
-		wg2.Wait()
+		for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+			queue <- true
+		}
 	}
 	// Check number of errors
 	for _, item := range crawled_urls {
@@ -249,7 +241,7 @@ func getPageLinks(input_url string) []Link {
 	})
 
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Scraping", r.URL.String(), "for links.")
+		fmt.Println("Link scraping: ", r.URL.String())
 	})
 
 	c.Visit(input_url)
@@ -306,21 +298,23 @@ func parseUrlset(doc goquery.Document) []string {
 func parseSitemap(doc goquery.Document) []string {
 	// Check if sitemap file contains sitemap or url tags
 	if len(doc.Find("sitemap").Nodes) > 0 {
-		var wg sync.WaitGroup
+		queue := make(chan bool, MAX_CONCURRENT_SCRAPES)
 		sitemaps := parseUrlset(doc)
 		var pages []string
 		for _, entrypoint := range sitemaps {
-			wg.Add(1)
-			go func(wg *sync.WaitGroup, entrypoint string) {
-				defer wg.Done()
+			queue <- true
+			go func(entrypoint string) {
+				defer func() { <-queue }()
 				result, err := getSitemap(entrypoint)
 				if err != nil {
 					log.Println(err)
 				}
 				pages = append(pages, result...)
-			}(&wg, entrypoint)
+			}(entrypoint)
 		}
-		wg.Wait()
+		for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+			queue <- true
+		}
 		return pages
 	} else if len(doc.Find("url").Nodes) > 0 {
 		pages := parseUrlset(doc)
