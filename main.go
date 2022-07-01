@@ -132,7 +132,7 @@ func main() {
 		}
 	}
 	// End output
-	fmt.Println("A total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
+	fmt.Println("\nA total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
 	fmt.Println("\nTotal execution time:", time.Since(start))
 }
 
