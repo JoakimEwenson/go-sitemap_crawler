@@ -91,57 +91,58 @@ func main() {
 	}
 
 	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
-	var user_continue string
-	fmt.Print("Continue verifying URLs? (y/n) ")
-	fmt.Scan(&user_continue)
-	if strings.ToLower(user_continue) != "y" {
-		os.Exit(1)
-	}
+	// Ask user to continue before verifying URLs
+	// var user_continue string
+	// fmt.Print("Continue verifying URLs? (y/n) ")
+	// fmt.Scan(&user_continue)
+	// if strings.ToLower(user_continue) != "y" {
+	// 	os.Exit(1)
+	// }
 	fmt.Println()
 
 	// Check all links from all pages
 	checkUrlStatus(links)
 
-	time.Sleep(time.Second * 3)
-
 	// Output request errors at end of script
-	if num_errors > 0 || len(request_errors) > 0 {
-		// Set up file for log
-		file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
-		file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			log.Fatalf("Error opening file: %v\n", err)
+	defer func() {
+		if num_errors > 0 || len(request_errors) > 0 {
+			// Set up file for log
+			file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
+			file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+			if err != nil {
+				log.Fatalf("Error opening file: %v\n", err)
+			}
+			defer file.Close()
+			log.SetOutput(file)
+			fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
 		}
-		defer file.Close()
-		log.SetOutput(file)
-		fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
-	}
-	fmt.Println()
-	if len(request_errors) > 0 {
-		fmt.Println("\nErrors raised while checking URLs")
-		for _, err := range request_errors {
-			fmt.Println(err)
+		fmt.Println()
+		if len(request_errors) > 0 {
+			fmt.Println("\nErrors raised while checking URLs")
+			for _, err := range request_errors {
+				fmt.Println(err)
+			}
 		}
-	}
-	// Output HTTP errors
-	fmt.Println()
-	// Check if errors exists and output them to log file
-	if num_errors > 0 {
-		for _, item := range url_errors {
-			log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
+		// Output HTTP errors
+		fmt.Println()
+		// Check if errors exists and output them to log file
+		if num_errors > 0 {
+			for _, item := range url_errors {
+				log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
+			}
 		}
-	}
-	// End output
-	fmt.Println("\nA total of", len(crawled_urls), "links was checked and", num_errors, "produced errors of some sort.")
-	fmt.Println("\nTotal execution time:", time.Since(start))
+		// End output
+		fmt.Println("\nA total of", len(crawled_urls), "links on ", len(crawl_urls), " was checked and", num_errors, "produced errors of some sort.")
+		fmt.Println("\nTotal execution time:", time.Since(start))
+	}()
 }
 
 // Function for making a HEAD call and return status code
 func checkUrlStatus(links []Link) {
 	// Init default return value
 	status := 0
-	client := &http.Client{Timeout: 10 * time.Second}
-
+	client := &http.Client{Timeout: 15 * time.Second}
+	defer client.CloseIdleConnections()
 	// Slice for links with errors
 	var retry_urls []Link
 
@@ -163,8 +164,8 @@ func checkUrlStatus(links []Link) {
 				fmt.Println(err)
 			}
 			if err == nil {
-				status = resp.StatusCode
 				defer resp.Body.Close()
+				status = resp.StatusCode
 			}
 			is_ok := false
 			if status >= 200 && status <= 299 {
@@ -172,6 +173,7 @@ func checkUrlStatus(links []Link) {
 			}
 			fmt.Printf("HEAD response %d for %s\n", status, input.url)
 			crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
+
 		}(link)
 	}
 	for i := 0; i < MAX_CONCURRENT_URLCHECKS; i++ {
@@ -180,20 +182,22 @@ func checkUrlStatus(links []Link) {
 
 	// Retry with GET instead of head if retry_urls is populated
 	if len(retry_urls) > 0 {
-		queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
+		retry_client := &http.Client{Timeout: 30 * time.Second}
+		defer retry_client.CloseIdleConnections()
+		retry_queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
 		for _, link := range retry_urls {
 			go func(input Link) {
-				defer func() { <-queue }()
+				defer func() { <-retry_queue }()
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
 					fmt.Println(err)
 				}
 
 				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
-				resp, err := client.Do(req)
+				resp, err := retry_client.Do(req)
 				if err != nil {
-					request_errors = append(request_errors, err)
 					fmt.Println(err)
+					request_errors = append(request_errors, err)
 				}
 				if err == nil {
 					defer resp.Body.Close()
@@ -208,7 +212,7 @@ func checkUrlStatus(links []Link) {
 			}(link)
 		}
 		for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
-			queue <- true
+			retry_queue <- true
 		}
 	}
 	// Check number of errors
