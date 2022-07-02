@@ -114,13 +114,13 @@ func main() {
 			}
 			defer file.Close()
 			log.SetOutput(file)
-			fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
+			defer fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
 		}
 		fmt.Println()
 		if len(request_errors) > 0 {
 			fmt.Println("\nErrors raised while checking URLs")
 			for _, err := range request_errors {
-				fmt.Println(err)
+				log.Println(err)
 			}
 		}
 		// Output HTTP errors
