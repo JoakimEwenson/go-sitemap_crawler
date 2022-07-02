@@ -38,8 +38,8 @@ type CrawlResponse struct {
 var entrypoint string = "http://127.0.0.1/sitemap.xml"
 
 // Set a maximum of concurrent jobs
-const MAX_CONCURRENT_SCRAPES = 10
-const MAX_CONCURRENT_URLCHECKS = 25
+const MAX_CONCURRENT_SCRAPES = 25
+const MAX_CONCURRENT_URLCHECKS = 100
 
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
@@ -114,7 +114,7 @@ func main() {
 			}
 			defer file.Close()
 			log.SetOutput(file)
-			defer fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.", file_name)
+			defer fmt.Println("\nHTTP errors found. Check logfile (", file_name, ") for results.")
 		}
 		fmt.Println()
 		if len(request_errors) > 0 {
@@ -132,7 +132,7 @@ func main() {
 			}
 		}
 		// End output
-		fmt.Println("\nA total of", len(crawled_urls), "links on ", len(crawl_urls), " was checked and", num_errors, "produced errors of some sort.")
+		fmt.Println("\nA total of", len(crawled_urls), "links on", len(crawl_urls), "pages was checked and", num_errors, "produced errors of some sort.")
 		fmt.Println("\nTotal execution time:", time.Since(start))
 	}()
 }
