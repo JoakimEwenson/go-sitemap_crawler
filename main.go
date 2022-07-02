@@ -20,6 +20,12 @@ import (
 	"github.com/gocolly/colly"
 )
 
+type RequestErrors struct {
+	err         error
+	origin_url  string
+	origin_text string
+}
+
 type Link struct {
 	origin_url  string
 	origin_text string
@@ -52,7 +58,7 @@ var crawled_urls []CrawlResponse
 
 var num_errors int = 0
 var url_errors []CrawlResponse
-var request_errors []error
+var request_errors []RequestErrors
 
 // Main function for executing the program
 func main() {
@@ -120,7 +126,7 @@ func main() {
 		if len(request_errors) > 0 {
 			fmt.Println("\nErrors raised while checking URLs")
 			for _, err := range request_errors {
-				log.Println(err)
+				log.Printf("%v (linked from %v with text %v)\n", err.err, err.origin_url, err.origin_text)
 			}
 		}
 		// Output HTTP errors
@@ -160,7 +166,7 @@ func checkUrlStatus(links []Link) {
 			resp, err := client.Do(req)
 			if err != nil {
 				retry_urls = append(retry_urls, input)
-				request_errors = append(request_errors, err)
+				request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
 				fmt.Println(err)
 			}
 			if err == nil {
@@ -197,7 +203,7 @@ func checkUrlStatus(links []Link) {
 				resp, err := retry_client.Do(req)
 				if err != nil {
 					fmt.Println(err)
-					request_errors = append(request_errors, err)
+					request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
 				}
 				if err == nil {
 					defer resp.Body.Close()
