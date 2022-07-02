@@ -20,6 +20,7 @@ import (
 	"github.com/gocolly/colly"
 )
 
+// Struct for giving request errors more information
 type RequestErrors struct {
 	err         error
 	origin_url  string
@@ -44,11 +45,14 @@ type CrawlResponse struct {
 var entrypoint string = "http://127.0.0.1/sitemap.xml"
 
 // Set a maximum of concurrent jobs
-const MAX_CONCURRENT_SCRAPES = 25
-const MAX_CONCURRENT_URLCHECKS = 100
+const MAX_CONCURRENT_SCRAPES = 50
+const MAX_CONCURRENT_URLCHECKS = 50
 
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
+
+// Set a constant for HTTP request timeout
+const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 30)
 
 // Init empty slice of URLs to verify
 var url_list []Link
@@ -147,7 +151,7 @@ func main() {
 func checkUrlStatus(links []Link) {
 	// Init default return value
 	status := 0
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
 	defer client.CloseIdleConnections()
 	// Slice for links with errors
 	var retry_urls []Link
@@ -166,8 +170,8 @@ func checkUrlStatus(links []Link) {
 			resp, err := client.Do(req)
 			if err != nil {
 				retry_urls = append(retry_urls, input)
-				request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
-				fmt.Println(err)
+				//request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
+				fmt.Println("HEAD error:", err)
 			}
 			if err == nil {
 				defer resp.Body.Close()
@@ -188,7 +192,7 @@ func checkUrlStatus(links []Link) {
 
 	// Retry with GET instead of head if retry_urls is populated
 	if len(retry_urls) > 0 {
-		retry_client := &http.Client{Timeout: 30 * time.Second}
+		retry_client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
 		defer retry_client.CloseIdleConnections()
 		retry_queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
 		for _, link := range retry_urls {
@@ -196,7 +200,7 @@ func checkUrlStatus(links []Link) {
 				defer func() { <-retry_queue }()
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
-					fmt.Println(err)
+					fmt.Println("GET error:", err)
 				}
 
 				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
@@ -299,7 +303,7 @@ func getSitemap(entrypoint string) ([]string, error) {
 
 func getXML(entrypoint string) (*http.Response, error) {
 	// Go fetch!
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
 	req, err := http.NewRequest(http.MethodGet, entrypoint, nil)
 	if err != nil {
 		fmt.Println(err)
