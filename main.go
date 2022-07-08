@@ -7,6 +7,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -41,9 +42,6 @@ type CrawlResponse struct {
 	is_ok       bool
 }
 
-// Temporary entry point if no arguments given
-var entrypoint string = "http://127.0.0.1/sitemap.xml"
-
 // Set a maximum of concurrent jobs
 const MAX_CONCURRENT_SCRAPES = 50
 const MAX_CONCURRENT_URLCHECKS = 50
@@ -64,15 +62,24 @@ var num_errors int = 0
 var url_errors []CrawlResponse
 var request_errors []RequestErrors
 
+// Global variables for flag
+var entrypoint string
+var concurrent_limit int
+var timeout time.Duration
+var verify_test bool
+
 // Main function for executing the program
 func main() {
-	if len(os.Args) == 2 {
-		_, input_err := url.ParseRequestURI(os.Args[1])
-		if input_err != nil {
-			panic("Error in input URL!")
-		}
-		entrypoint = os.Args[1]
-	}
+	// Parse CLI flags
+	cli_entrypoint := flag.String("url", "http://127.0.0.1/sitemap.xml", "Entry point URL")
+	cli_concurrent_limit := flag.Int("limit", MAX_CONCURRENT_URLCHECKS, "Limit amount of concurrent scrapes")
+	cli_timeout := flag.Duration("timeout", HTTP_REQUEST_TIMEOUT, "Timeout limit for each request")
+	cli_verify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
+	flag.Parse()
+	entrypoint = *cli_entrypoint
+	concurrent_limit = *cli_concurrent_limit
+	timeout = *cli_timeout
+	verify_test = *cli_verify
 	// Init start time for execution time calc
 	start := time.Now()
 	timestamp := start.Unix()
@@ -83,11 +90,12 @@ func main() {
 	// Get sitemap content
 	crawl_urls, err := getSitemap(entrypoint)
 	if err != nil {
-		log.Println(err)
+		fmt.Println(err)
+		os.Exit(0)
 	}
 
 	var links []Link
-	queue := make(chan bool, MAX_CONCURRENT_SCRAPES)
+	queue := make(chan bool, concurrent_limit)
 	for _, crawl_url := range crawl_urls {
 		queue <- true
 		go func(crawl_url string) {
@@ -96,18 +104,20 @@ func main() {
 			links = getPageLinks(crawl_url)
 		}(crawl_url)
 	}
-	for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+	for i := 0; i < concurrent_limit; i++ {
 		queue <- true
 	}
 
 	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
 	// Ask user to continue before verifying URLs
-	// var user_continue string
-	// fmt.Print("Continue verifying URLs? (y/n) ")
-	// fmt.Scan(&user_continue)
-	// if strings.ToLower(user_continue) != "y" {
-	// 	os.Exit(1)
-	// }
+	if verify_test {
+		var user_continue string
+		fmt.Print("Continue verifying URLs? (y/n) ")
+		fmt.Scan(&user_continue)
+		if strings.ToLower(user_continue) != "y" {
+			os.Exit(1)
+		}
+	}
 	fmt.Println()
 
 	// Check all links from all pages
@@ -117,7 +127,7 @@ func main() {
 	defer func() {
 		if num_errors > 0 || len(request_errors) > 0 {
 			// Set up file for log
-			file_name := parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
+			file_name := "result_" + parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
 			file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 			if err != nil {
 				log.Fatalf("Error opening file: %v\n", err)
@@ -151,12 +161,12 @@ func main() {
 func checkUrlStatus(links []Link) {
 	// Init default return value
 	status := 0
-	client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
+	client := &http.Client{Timeout: timeout}
 	defer client.CloseIdleConnections()
 	// Slice for links with errors
 	var retry_urls []Link
 
-	queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
+	queue := make(chan bool, concurrent_limit)
 	for _, link := range links {
 		queue <- true
 		go func(input Link) {
@@ -186,15 +196,15 @@ func checkUrlStatus(links []Link) {
 
 		}(link)
 	}
-	for i := 0; i < MAX_CONCURRENT_URLCHECKS; i++ {
+	for i := 0; i < concurrent_limit; i++ {
 		queue <- true
 	}
 
 	// Retry with GET instead of head if retry_urls is populated
 	if len(retry_urls) > 0 {
-		retry_client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
+		retry_client := &http.Client{Timeout: timeout}
 		defer retry_client.CloseIdleConnections()
-		retry_queue := make(chan bool, MAX_CONCURRENT_URLCHECKS)
+		retry_queue := make(chan bool, concurrent_limit)
 		for _, link := range retry_urls {
 			go func(input Link) {
 				defer func() { <-retry_queue }()
@@ -221,7 +231,7 @@ func checkUrlStatus(links []Link) {
 				crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
 			}(link)
 		}
-		for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+		for i := 0; i < concurrent_limit; i++ {
 			retry_queue <- true
 		}
 	}
@@ -303,7 +313,7 @@ func getSitemap(entrypoint string) ([]string, error) {
 
 func getXML(entrypoint string) (*http.Response, error) {
 	// Go fetch!
-	client := &http.Client{Timeout: HTTP_REQUEST_TIMEOUT}
+	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest(http.MethodGet, entrypoint, nil)
 	if err != nil {
 		fmt.Println(err)
@@ -333,7 +343,7 @@ func parseUrlset(doc goquery.Document) []string {
 func parseSitemap(doc goquery.Document) []string {
 	// Check if sitemap file contains sitemap or url tags
 	if len(doc.Find("sitemap").Nodes) > 0 {
-		queue := make(chan bool, MAX_CONCURRENT_SCRAPES)
+		queue := make(chan bool, concurrent_limit)
 		sitemaps := parseUrlset(doc)
 		var pages []string
 		for _, entrypoint := range sitemaps {
@@ -347,7 +357,7 @@ func parseSitemap(doc goquery.Document) []string {
 				pages = append(pages, result...)
 			}(entrypoint)
 		}
-		for i := 0; i < MAX_CONCURRENT_SCRAPES; i++ {
+		for i := 0; i < concurrent_limit; i++ {
 			queue <- true
 		}
 		return pages
