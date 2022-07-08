@@ -55,6 +55,9 @@ const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 30)
 // Init empty slice of URLs to verify
 var url_list []Link
 
+// Init empty slice of pages to crawl
+var page_list []string
+
 // Init empty slice for crawled URLs
 var crawled_urls []CrawlResponse
 
@@ -167,7 +170,7 @@ func main() {
 		}
 		// End output
 		fmt.Println("\nA total of", len(crawled_urls), "links on", len(crawl_urls), "pages was checked and", num_errors, "produced errors of some sort.")
-		fmt.Println("\nTotal execution time:", time.Since(start))
+		defer fmt.Println("\nTotal execution time:", time.Since(start))
 	}()
 }
 
@@ -269,6 +272,15 @@ func isUniqueUrl(link_url string) bool {
 	return true
 }
 
+func isUniquePage(page_url string) bool {
+	for _, exists := range page_list {
+		if exists == page_url {
+			return false
+		}
+	}
+	return true
+}
+
 // Function for fetching URLs in a HTML page, returning a list
 // that can be crawled for status later
 func getPageLinks(input_url string) []Link {
@@ -348,7 +360,10 @@ func parseUrlset(doc goquery.Document) []string {
 	for i := range sel.Nodes {
 		loc := sel.Eq(i)
 		result := loc.Text()
-		locations = append(locations, result)
+		if isUniquePage(result) {
+			page_list = append(page_list, result)
+			locations = append(locations, result)
+		}
 	}
 
 	return locations
