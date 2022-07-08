@@ -71,12 +71,17 @@ var verify_test bool
 // Main function for executing the program
 func main() {
 	// Parse CLI flags
-	cli_entrypoint := flag.String("url", "http://127.0.0.1/sitemap.xml", "Entry point URL")
+	cli_entrypoint := flag.String("url", "", "Entrypoint URL")
 	cli_concurrent_limit := flag.Int("limit", MAX_CONCURRENT_URLCHECKS, "Limit amount of concurrent scrapes")
 	cli_timeout := flag.Duration("timeout", HTTP_REQUEST_TIMEOUT, "Timeout limit for each request")
 	cli_verify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
 	flag.Parse()
-	entrypoint = *cli_entrypoint
+	if *cli_entrypoint != "" {
+		entrypoint = *cli_entrypoint
+	} else {
+		fmt.Print("Enter sitemap URL: ")
+		fmt.Scanln(&entrypoint)
+	}
 	concurrent_limit = *cli_concurrent_limit
 	timeout = *cli_timeout
 	verify_test = *cli_verify
@@ -85,7 +90,10 @@ func main() {
 	timestamp := start.Unix()
 
 	// Parse entry point for base url
-	parsed_entrypoint, _ := url.ParseRequestURI(entrypoint)
+	parsed_entrypoint, err := url.ParseRequestURI(entrypoint)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Get sitemap content
 	crawl_urls, err := getSitemap(entrypoint)
@@ -127,14 +135,20 @@ func main() {
 	defer func() {
 		if num_errors > 0 || len(request_errors) > 0 {
 			// Set up file for log
-			file_name := "result_" + parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
+			if _, err := os.Stat("./logs"); os.IsNotExist(err) {
+				err := os.Mkdir("./logs", 0755)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			file_name := "logs/result_" + parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
 			file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 			if err != nil {
 				log.Fatalf("Error opening file: %v\n", err)
 			}
 			defer file.Close()
 			log.SetOutput(file)
-			defer fmt.Println("\nHTTP errors found. Check logfile (", file_name, ") for results.")
+			defer fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.\n", file_name)
 		}
 		fmt.Println()
 		if len(request_errors) > 0 {
