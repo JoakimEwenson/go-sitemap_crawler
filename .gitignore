@@ -26,3 +26,6 @@ go.work
 
 # macOS Finder
 .DS_Store
+
+# Executables
+*.exe
