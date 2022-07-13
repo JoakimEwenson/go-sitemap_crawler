@@ -1,4 +1,4 @@
-module ewenson/404_crawler
+module ewenson/sitemap_crawler
 
 go 1.18
 
