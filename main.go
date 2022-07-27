@@ -44,7 +44,7 @@ type CrawlResponse struct {
 
 // Set a maximum of concurrent jobs
 const MAX_CONCURRENT_SCRAPES = 50
-const MAX_CONCURRENT_URLCHECKS = 50
+const MAX_CONCURRENT_URLCHECKS = 10
 
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
