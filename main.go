@@ -394,6 +394,7 @@ func parseSitemap(doc goquery.Document) []string {
 		pages := parseUrlset(doc)
 		return pages
 	} else {
-		panic("Nothing found")
+		fmt.Println("Empty result")
+		return nil
 	}
 }
