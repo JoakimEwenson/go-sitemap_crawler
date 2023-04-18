@@ -7,6 +7,7 @@ Have you ever come across a 404 link on some blog? Maybee want to verify that al
 ## How to use it
 1. Clone or download and unzip to your location of choice
 2. Navigate to folder and run `go run . https://example.com/sitemap.xml`
+3. Need help or curious about available flags? Run `go run . -h`
 
 ## What it does
 1. The file reads sitemap.xml and collect all `<loc>` elements and the link inside. If the sitemap.xml contains a sitemap index, it will crawl the index and fetch links from all sitemaps linked.
