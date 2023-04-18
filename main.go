@@ -50,6 +50,9 @@ const MAX_CONCURRENT_URLCHECKS = 10
 // Set constant for User Agent
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
 
+// Set constant for method
+const HTTP_REQUEST_METHOD = "HEAD"
+
 // Set a constant for HTTP request timeout
 const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 60)
 
@@ -69,6 +72,7 @@ var request_errors []RequestErrors
 // Global variables for flag
 var entrypoint string
 var concurrent_limit int
+var request_method string
 var timeout time.Duration
 var verify_test bool
 
@@ -77,6 +81,7 @@ func main() {
 	// Parse CLI flags
 	cli_entrypoint := flag.String("url", "", "Entrypoint URL")
 	cli_concurrent_limit := flag.Int("limit", MAX_CONCURRENT_URLCHECKS, "Limit amount of concurrent scrapes")
+	cli_request_method := flag.String("method", HTTP_REQUEST_METHOD, "Initial method, HEAD or GET")
 	cli_timeout := flag.Duration("timeout", HTTP_REQUEST_TIMEOUT, "Timeout limit for each request")
 	cli_verify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
 	flag.Parse()
@@ -87,6 +92,7 @@ func main() {
 		fmt.Scanln(&entrypoint)
 	}
 	concurrent_limit = *cli_concurrent_limit
+	request_method = *cli_request_method
 	timeout = *cli_timeout
 	verify_test = *cli_verify
 	// Init start time for execution time calc
@@ -198,8 +204,15 @@ func checkUrlStatus(links []Link) {
 	for _, link := range links {
 		queue <- true
 		go func(input Link) {
-			defer func() { <-queue }()
-			req, err := http.NewRequest(http.MethodHead, input.url, nil)
+			defer func() { <-queue } ()
+			var method string
+
+			if request_method == "GET" {
+				method = http.MethodGet
+			} else {
+				method = http.MethodHead
+			}
+			req, err := http.NewRequest(method, input.url, nil)
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -209,17 +222,18 @@ func checkUrlStatus(links []Link) {
 			if err != nil {
 				retry_urls = append(retry_urls, input)
 				//request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
-				fmt.Println("HEAD error:", err)
+				fmt.Println("Request error:", err)
 			}
 			if err == nil {
 				defer resp.Body.Close()
 				status = resp.StatusCode
 			}
 			is_ok := false
+			// Ignore LinkedIn 999 response
 			if (status >= 200 && status <= 299) || status == 999 {
 				is_ok = true
 			}
-			fmt.Printf("HEAD response %d for %s\n", status, input.url)
+			fmt.Printf("%s response %d for %s\n", request_method, status, input.url)
 			crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
 
 		}(link)
