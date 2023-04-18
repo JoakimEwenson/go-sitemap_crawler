@@ -205,7 +205,7 @@ func checkUrlStatus(links []Link) {
 				status = resp.StatusCode
 			}
 			is_ok := false
-			if status >= 200 && status <= 299 {
+			if (status >= 200 && status <= 299) || status == 999 {
 				is_ok = true
 			}
 			fmt.Printf("HEAD response %d for %s\n", status, input.url)
