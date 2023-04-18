@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -50,7 +51,7 @@ const MAX_CONCURRENT_URLCHECKS = 10
 const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
 
 // Set a constant for HTTP request timeout
-const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 30)
+const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 60)
 
 // Init empty slice of URLs to verify
 var url_list []Link
@@ -174,11 +175,21 @@ func main() {
 	}()
 }
 
+func redirectTrim(req *http.Request, via []*http.Request) error {
+	if len(via) >= 25 {
+		return errors.New("stopped after 25 redirects")
+	}
+	return nil
+}
+
 // Function for making a HEAD call and return status code
 func checkUrlStatus(links []Link) {
 	// Init default return value
 	status := 0
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		CheckRedirect: redirectTrim,
+		Timeout:       timeout,
+	}
 	defer client.CloseIdleConnections()
 	// Slice for links with errors
 	var retry_urls []Link
