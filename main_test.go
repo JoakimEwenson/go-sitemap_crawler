@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -596,5 +597,71 @@ func TestGetSitemap_InvalidResponse(t *testing.T) {
 	_, err := getSitemap(srv.URL+"/sitemap.xml", 5, 2*time.Second)
 	if err == nil {
 		t.Error("expected error when server closes connection, got nil")
+	}
+}
+
+// ---- writeCSVReport -----------------------------------------------------
+
+func TestWriteCSVReport_HeaderAndRows(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir() + "/report.csv"
+
+	urlErrors := []CrawlResponse{
+		{url: "https://example.com/broken", statusCode: 404, originText: "Click here", originURL: "https://example.com/"},
+		{url: "https://example.com/gone", statusCode: 410, originText: "Old link", originURL: "https://example.com/page"},
+	}
+	reqErrors := []RequestError{
+		{url: "https://example.com/timeout", err: fmt.Errorf("connection timeout"), originText: "Timeout link", originURL: "https://example.com/"},
+	}
+
+	if err := writeCSVReport(tmp, urlErrors, reqErrors); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	s := string(content)
+
+	for _, want := range []string{
+		"Broken URL", "HTTP Status Code", "Status Description", "Link Text", "Page Where Link Was Found",
+		"https://example.com/broken", "404", "Not Found", "Click here",
+		"https://example.com/gone", "410", "Gone",
+		"https://example.com/timeout", "N/A", "connection timeout", "Timeout link",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("CSV missing expected value %q", want)
+		}
+	}
+}
+
+func TestWriteCSVReport_EmptyErrors_HeaderOnly(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir() + "/empty.csv"
+
+	if err := writeCSVReport(tmp, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content, err := os.ReadFile(tmp)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected 1 line (header only), got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "Broken URL") {
+		t.Errorf("expected header row, got %q", lines[0])
+	}
+}
+
+func TestWriteCSVReport_InvalidPath_ReturnsError(t *testing.T) {
+	t.Parallel()
+	err := writeCSVReport("/nonexistent/path/report.csv", nil, nil)
+	if err == nil {
+		t.Error("expected error for invalid path, got nil")
 	}
 }

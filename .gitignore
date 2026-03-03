@@ -23,6 +23,7 @@ go.work
 # Log files
 *.txt
 *.log
+*.csv
 
 # macOS Finder
 .DS_Store

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 
 type RequestError struct {
 	err        error
+	url        string
 	originURL  string
 	originText string
 }
@@ -53,6 +55,7 @@ func main() {
 	cliRequestMethod := flag.String("method", httpRequestMethod, "Initial method, HEAD or GET")
 	cliTimeout := flag.Duration("timeout", httpRequestTimeout, "Timeout limit for each request")
 	cliVerify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
+	cliLog := flag.Bool("log", false, "Write results to a plain text log file instead of CSV")
 	flag.Parse()
 
 	var entrypoint string
@@ -67,6 +70,7 @@ func main() {
 	requestMethod := *cliRequestMethod
 	timeout := *cliTimeout
 	verifyTest := *cliVerify
+	useLog := *cliLog
 
 	start := time.Now()
 	timestamp := start.Unix()
@@ -131,31 +135,39 @@ func main() {
 	crawledURLs, urlErrors, requestErrors := checkURLStatus(allLinks, concurrentLimit, requestMethod, timeout)
 	numErrors := len(urlErrors)
 
-	var logFileName string
+	var outputFileName string
 	if numErrors > 0 || len(requestErrors) > 0 {
-		if _, err := os.Stat("./logs"); os.IsNotExist(err) {
-			if err := os.Mkdir("./logs", 0755); err != nil {
-				log.Fatal(err)
+		if err := os.MkdirAll("./logs", 0755); err != nil {
+			log.Fatal(err)
+		}
+
+		if useLog {
+			outputFileName = "logs/result_" + parsedEntrypoint.Host + "_" + strconv.FormatInt(timestamp, 10) + ".log"
+			file, err := os.OpenFile(outputFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+			if err != nil {
+				log.Fatalf("Error opening file: %v\n", err)
+			}
+			defer file.Close()
+			log.SetOutput(file)
+		} else {
+			outputFileName = "logs/report_" + parsedEntrypoint.Host + "_" + strconv.FormatInt(timestamp, 10) + ".csv"
+			if err := writeCSVReport(outputFileName, urlErrors, requestErrors); err != nil {
+				log.Fatalf("Error writing CSV report: %v\n", err)
 			}
 		}
-		logFileName = "logs/result_" + parsedEntrypoint.Host + "_" + strconv.FormatInt(timestamp, 10) + ".log"
-		file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			log.Fatalf("Error opening file: %v\n", err)
-		}
-		defer file.Close()
-		log.SetOutput(file)
 	}
 
 	fmt.Println()
 	if len(requestErrors) > 0 {
 		fmt.Println("Errors raised while checking URLs")
-		for _, e := range requestErrors {
-			log.Printf("%v (linked from %v with text %v)\n", e.err, e.originURL, e.originText)
+		if useLog {
+			for _, e := range requestErrors {
+				log.Printf("%v (linked from %v with text %v)\n", e.err, e.originURL, e.originText)
+			}
 		}
 	}
 
-	if numErrors > 0 {
+	if numErrors > 0 && useLog {
 		for _, item := range urlErrors {
 			log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.statusCode, item.url, item.originURL, item.originText)
 		}
@@ -164,9 +176,70 @@ func main() {
 	fmt.Printf("\nA total of %d links on %d pages was checked and %d produced errors of some sort.\n", len(crawledURLs), len(crawlURLs), numErrors)
 	fmt.Println("Total execution time:", time.Since(start))
 
-	if logFileName != "" {
-		fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.\n", logFileName)
+	if outputFileName != "" {
+		if useLog {
+			fmt.Printf("\nErrors found. Check logfile (%v) for results.\n", outputFileName)
+		} else {
+			fmt.Printf("\nErrors found. Results saved to %v\n", outputFileName)
+		}
 	}
+}
+
+func writeCSVReport(filename string, urlErrors []CrawlResponse, requestErrors []RequestError) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+
+	w := csv.NewWriter(file)
+
+	if err := w.Write([]string{
+		"Broken URL",
+		"HTTP Status Code",
+		"Status Description",
+		"Link Text",
+		"Page Where Link Was Found",
+	}); err != nil {
+		file.Close()
+		return err
+	}
+
+	for _, item := range urlErrors {
+		statusDesc := http.StatusText(item.statusCode)
+		if statusDesc == "" {
+			statusDesc = "Unknown"
+		}
+		if err := w.Write([]string{
+			item.url,
+			strconv.Itoa(item.statusCode),
+			statusDesc,
+			item.originText,
+			item.originURL,
+		}); err != nil {
+			file.Close()
+			return err
+		}
+	}
+
+	for _, e := range requestErrors {
+		if err := w.Write([]string{
+			e.url,
+			"N/A",
+			e.err.Error(),
+			e.originText,
+			e.originURL,
+		}); err != nil {
+			file.Close()
+			return err
+		}
+	}
+
+	w.Flush()
+	if err := w.Error(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func redirectTrim(req *http.Request, via []*http.Request) error {
@@ -207,7 +280,14 @@ func checkURLStatus(links []Link, concurrentLimit int, requestMethod string, tim
 
 			req, err := http.NewRequest(method, input.url, nil)
 			if err != nil {
-				fmt.Println(err)
+				mu.Lock()
+				requestErrors = append(requestErrors, RequestError{
+					err:        err,
+					url:        input.url,
+					originURL:  input.originURL,
+					originText: input.originText,
+				})
+				mu.Unlock()
 				return
 			}
 			req.Header.Set("User-Agent", crawlerUserAgent)
@@ -242,7 +322,7 @@ func checkURLStatus(links []Link, concurrentLimit int, requestMethod string, tim
 
 	// Retry with GET for any URLs that failed the initial request
 	if len(retryURLs) > 0 {
-		retryClient := &http.Client{Timeout: timeout}
+		retryClient := &http.Client{Timeout: timeout, CheckRedirect: redirectTrim}
 		defer retryClient.CloseIdleConnections()
 
 		var retryWg sync.WaitGroup
@@ -257,7 +337,14 @@ func checkURLStatus(links []Link, concurrentLimit int, requestMethod string, tim
 
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
-					fmt.Println("GET error:", err)
+					mu.Lock()
+					requestErrors = append(requestErrors, RequestError{
+						err:        err,
+						url:        input.url,
+						originURL:  input.originURL,
+						originText: input.originText,
+					})
+					mu.Unlock()
 					return
 				}
 				req.Header.Set("User-Agent", crawlerUserAgent)
@@ -268,6 +355,7 @@ func checkURLStatus(links []Link, concurrentLimit int, requestMethod string, tim
 					mu.Lock()
 					requestErrors = append(requestErrors, RequestError{
 						err:        err,
+						url:        input.url,
 						originURL:  input.originURL,
 						originText: input.originText,
 					})
