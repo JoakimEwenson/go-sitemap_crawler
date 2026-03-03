@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & release
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - os: darwin
+            arch: arm64
+            suffix: ""
+            asset_name: sitemap_crawler-macos-arm64
+          - os: linux
+            arch: amd64
+            suffix: ""
+            asset_name: sitemap_crawler-linux-x86_64
+          - os: windows
+            arch: amd64
+            suffix: ".exe"
+            asset_name: sitemap_crawler-windows-x86_64.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
+            -o ${{ matrix.asset_name }}${{ matrix.suffix }} .
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset_name }}${{ matrix.suffix }}
