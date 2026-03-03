@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: Build & release
+    name: Build (${{ matrix.asset_name }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -27,7 +27,7 @@ jobs:
           - os: windows
             arch: amd64
             suffix: ".exe"
-            asset_name: sitemap_crawler-windows-x86_64.exe
+            asset_name: sitemap_crawler-windows-x86_64
 
     steps:
       - name: Checkout
@@ -47,11 +47,27 @@ jobs:
           go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o ${{ matrix.asset_name }}${{ matrix.suffix }} .
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}${{ matrix.suffix }}
+          path: ${{ matrix.asset_name }}${{ matrix.suffix }}
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset_name }}${{ matrix.suffix }}
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        retry: 3
-        retry_backoff: 5000
