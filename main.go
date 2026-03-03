@@ -16,169 +16,157 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/gocolly/colly"
 )
 
-// Struct for giving request errors more information
-type RequestErrors struct {
-	err         error
-	origin_url  string
-	origin_text string
+type RequestError struct {
+	err        error
+	originURL  string
+	originText string
 }
 
 type Link struct {
-	origin_url  string
-	origin_text string
-	url         string
+	originURL  string
+	originText string
+	url        string
 }
 
 type CrawlResponse struct {
-	origin_url  string
-	origin_text string
-	url         string
-	status_code int
-	is_ok       bool
+	originURL  string
+	originText string
+	url        string
+	statusCode int
+	isOk       bool
 }
 
-// Set a maximum of concurrent jobs
-const MAX_CONCURRENT_SCRAPES = 50
-const MAX_CONCURRENT_URLCHECKS = 10
+const maxConcurrentURLChecks = 10
+const crawlerUserAgent = "Golang Link Crawler/1.0"
+const httpRequestMethod = "HEAD"
+const httpRequestTimeout = 60 * time.Second
 
-// Set constant for User Agent
-const CRAWLER_USER_AGENT = "Golang Link Crawler/1.0"
-
-// Set constant for method
-const HTTP_REQUEST_METHOD = "HEAD"
-
-// Set a constant for HTTP request timeout
-const HTTP_REQUEST_TIMEOUT = time.Duration(time.Second * 60)
-
-// Init empty slice of URLs to verify
-var url_list []Link
-
-// Init empty slice of pages to crawl
-var page_list []string
-
-// Init empty slice for crawled URLs
-var crawled_urls []CrawlResponse
-
-var num_errors int = 0
-var url_errors []CrawlResponse
-var request_errors []RequestErrors
-
-// Global variables for flag
-var entrypoint string
-var concurrent_limit int
-var request_method string
-var timeout time.Duration
-var verify_test bool
-
-// Main function for executing the program
 func main() {
-	// Parse CLI flags
-	cli_entrypoint := flag.String("url", "", "Entrypoint URL")
-	cli_concurrent_limit := flag.Int("limit", MAX_CONCURRENT_URLCHECKS, "Limit amount of concurrent scrapes")
-	cli_request_method := flag.String("method", HTTP_REQUEST_METHOD, "Initial method, HEAD or GET")
-	cli_timeout := flag.Duration("timeout", HTTP_REQUEST_TIMEOUT, "Timeout limit for each request")
-	cli_verify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
+	cliEntrypoint := flag.String("url", "", "Entrypoint URL")
+	cliConcurrentLimit := flag.Int("limit", maxConcurrentURLChecks, "Limit amount of concurrent scrapes")
+	cliRequestMethod := flag.String("method", httpRequestMethod, "Initial method, HEAD or GET")
+	cliTimeout := flag.Duration("timeout", httpRequestTimeout, "Timeout limit for each request")
+	cliVerify := flag.Bool("verify", true, "Ask user to verify crawl before continuing.")
 	flag.Parse()
-	if *cli_entrypoint != "" {
-		entrypoint = *cli_entrypoint
+
+	var entrypoint string
+	if *cliEntrypoint != "" {
+		entrypoint = *cliEntrypoint
 	} else {
 		fmt.Print("Enter sitemap URL: ")
 		fmt.Scanln(&entrypoint)
 	}
-	concurrent_limit = *cli_concurrent_limit
-	request_method = *cli_request_method
-	timeout = *cli_timeout
-	verify_test = *cli_verify
-	// Init start time for execution time calc
+
+	concurrentLimit := *cliConcurrentLimit
+	requestMethod := *cliRequestMethod
+	timeout := *cliTimeout
+	verifyTest := *cliVerify
+
 	start := time.Now()
 	timestamp := start.Unix()
 
-	// Parse entry point for base url
-	parsed_entrypoint, err := url.ParseRequestURI(entrypoint)
+	parsedEntrypoint, err := url.ParseRequestURI(entrypoint)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Get sitemap content
-	crawl_urls, err := getSitemap(entrypoint)
+	crawlURLs, err := getSitemap(entrypoint, concurrentLimit, timeout)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(0)
+		os.Exit(1)
 	}
 
-	var links []Link
-	queue := make(chan bool, concurrent_limit)
-	for _, crawl_url := range crawl_urls {
-		queue <- true
-		go func(crawl_url string) {
-			defer func() { <-queue }()
-			// Get all links in page
-			links = getPageLinks(crawl_url)
-		}(crawl_url)
+	httpClient := &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: redirectTrim,
 	}
-	for i := 0; i < concurrent_limit; i++ {
-		queue <- true
-	}
+	defer httpClient.CloseIdleConnections()
 
-	fmt.Println("A total of", len(links), "links were found in", len(crawl_urls), "pages")
-	// Ask user to continue before verifying URLs
-	if verify_test {
-		var user_continue string
+	var (
+		allLinks []Link
+		linksMu  sync.Mutex
+		seenURLs = make(map[string]bool)
+	)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrentLimit)
+
+	for _, crawlURL := range crawlURLs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(u string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			pageLinks := getPageLinks(u, httpClient)
+			linksMu.Lock()
+			for _, link := range pageLinks {
+				if !seenURLs[link.url] {
+					seenURLs[link.url] = true
+					allLinks = append(allLinks, link)
+				}
+			}
+			linksMu.Unlock()
+		}(crawlURL)
+	}
+	wg.Wait()
+
+	fmt.Println("A total of", len(allLinks), "links were found in", len(crawlURLs), "pages")
+
+	if verifyTest {
+		var userContinue string
 		fmt.Print("Continue verifying URLs? (y/n) ")
-		fmt.Scan(&user_continue)
-		if strings.ToLower(user_continue) != "y" {
+		fmt.Scan(&userContinue)
+		if strings.ToLower(userContinue) != "y" {
 			os.Exit(1)
 		}
 	}
 	fmt.Println()
 
-	// Check all links from all pages
-	checkUrlStatus(links)
+	crawledURLs, urlErrors, requestErrors := checkURLStatus(allLinks, concurrentLimit, requestMethod, timeout)
+	numErrors := len(urlErrors)
 
-	// Output request errors at end of script
-	defer func() {
-		if num_errors > 0 || len(request_errors) > 0 {
-			// Set up file for log
-			if _, err := os.Stat("./logs"); os.IsNotExist(err) {
-				err := os.Mkdir("./logs", 0755)
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-			file_name := "logs/result_" + parsed_entrypoint.Host + "_" + strconv.Itoa(int(timestamp)) + ".log"
-			file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-			if err != nil {
-				log.Fatalf("Error opening file: %v\n", err)
-			}
-			defer file.Close()
-			log.SetOutput(file)
-			defer fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.\n", file_name)
-		}
-		fmt.Println()
-		if len(request_errors) > 0 {
-			fmt.Println("\nErrors raised while checking URLs")
-			for _, err := range request_errors {
-				log.Printf("%v (linked from %v with text %v)\n", err.err, err.origin_url, err.origin_text)
+	var logFileName string
+	if numErrors > 0 || len(requestErrors) > 0 {
+		if _, err := os.Stat("./logs"); os.IsNotExist(err) {
+			if err := os.Mkdir("./logs", 0755); err != nil {
+				log.Fatal(err)
 			}
 		}
-		// Output HTTP errors
-		fmt.Println()
-		// Check if errors exists and output them to log file
-		if num_errors > 0 {
-			for _, item := range url_errors {
-				log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.status_code, item.url, item.origin_url, item.origin_text)
-			}
+		logFileName = "logs/result_" + parsedEntrypoint.Host + "_" + strconv.FormatInt(timestamp, 10) + ".log"
+		file, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("Error opening file: %v\n", err)
 		}
-		// End output
-		fmt.Println("\nA total of", len(crawled_urls), "links on", len(crawl_urls), "pages was checked and", num_errors, "produced errors of some sort.")
-		defer fmt.Println("\nTotal execution time:", time.Since(start))
-	}()
+		defer file.Close()
+		log.SetOutput(file)
+	}
+
+	fmt.Println()
+	if len(requestErrors) > 0 {
+		fmt.Println("Errors raised while checking URLs")
+		for _, e := range requestErrors {
+			log.Printf("%v (linked from %v with text %v)\n", e.err, e.originURL, e.originText)
+		}
+	}
+
+	if numErrors > 0 {
+		for _, item := range urlErrors {
+			log.Printf("HTTP %d for %s (linked from %s with text %s)\n", item.statusCode, item.url, item.originURL, item.originText)
+		}
+	}
+
+	fmt.Printf("\nA total of %d links on %d pages was checked and %d produced errors of some sort.\n", len(crawledURLs), len(crawlURLs), numErrors)
+	fmt.Println("Total execution time:", time.Since(start))
+
+	if logFileName != "" {
+		fmt.Printf("\nHTTP errors found. Check logfile (%v) for results.\n", logFileName)
+	}
 }
 
 func redirectTrim(req *http.Request, via []*http.Request) error {
@@ -188,238 +176,277 @@ func redirectTrim(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// Function for making a HEAD call and return status code
-func checkUrlStatus(links []Link) {
-	// Init default return value
-	status := 0
+func checkURLStatus(links []Link, concurrentLimit int, requestMethod string, timeout time.Duration) ([]CrawlResponse, []CrawlResponse, []RequestError) {
 	client := &http.Client{
 		CheckRedirect: redirectTrim,
 		Timeout:       timeout,
 	}
 	defer client.CloseIdleConnections()
-	// Slice for links with errors
-	var retry_urls []Link
 
-	queue := make(chan bool, concurrent_limit)
+	var (
+		crawledURLs   []CrawlResponse
+		retryURLs     []Link
+		requestErrors []RequestError
+		mu            sync.Mutex
+	)
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrentLimit)
+
 	for _, link := range links {
-		queue <- true
+		wg.Add(1)
+		sem <- struct{}{}
 		go func(input Link) {
-			defer func() { <-queue } ()
-			var method string
+			defer wg.Done()
+			defer func() { <-sem }()
 
-			if request_method == "GET" {
+			method := http.MethodHead
+			if requestMethod == "GET" {
 				method = http.MethodGet
-			} else {
-				method = http.MethodHead
 			}
+
 			req, err := http.NewRequest(method, input.url, nil)
 			if err != nil {
 				fmt.Println(err)
+				return
 			}
+			req.Header.Set("User-Agent", crawlerUserAgent)
 
-			req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
 			resp, err := client.Do(req)
 			if err != nil {
-				retry_urls = append(retry_urls, input)
-				//request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
 				fmt.Println("Request error:", err)
+				mu.Lock()
+				retryURLs = append(retryURLs, input)
+				mu.Unlock()
+				return
 			}
-			if err == nil {
-				defer resp.Body.Close()
-				status = resp.StatusCode
-			}
-			is_ok := false
-			// Ignore LinkedIn 999 response
-			if (status >= 200 && status <= 299) || status == 999 {
-				is_ok = true
-			}
-			fmt.Printf("%s response %d for %s\n", request_method, status, input.url)
-			crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
+			defer resp.Body.Close()
 
+			statusCode := resp.StatusCode
+			// Treat LinkedIn's non-standard 999 as OK
+			isOk := (statusCode >= 200 && statusCode <= 299) || statusCode == 999
+			fmt.Printf("%s response %d for %s\n", requestMethod, statusCode, input.url)
+
+			mu.Lock()
+			crawledURLs = append(crawledURLs, CrawlResponse{
+				originURL:  input.originURL,
+				originText: input.originText,
+				url:        input.url,
+				statusCode: statusCode,
+				isOk:       isOk,
+			})
+			mu.Unlock()
 		}(link)
 	}
-	for i := 0; i < concurrent_limit; i++ {
-		queue <- true
-	}
+	wg.Wait()
 
-	// Retry with GET instead of head if retry_urls is populated
-	if len(retry_urls) > 0 {
-		retry_client := &http.Client{Timeout: timeout}
-		defer retry_client.CloseIdleConnections()
-		retry_queue := make(chan bool, concurrent_limit)
-		for _, link := range retry_urls {
+	// Retry with GET for any URLs that failed the initial request
+	if len(retryURLs) > 0 {
+		retryClient := &http.Client{Timeout: timeout}
+		defer retryClient.CloseIdleConnections()
+
+		var retryWg sync.WaitGroup
+		retrySem := make(chan struct{}, concurrentLimit)
+
+		for _, link := range retryURLs {
+			retryWg.Add(1)
+			retrySem <- struct{}{}
 			go func(input Link) {
-				defer func() { <-retry_queue }()
+				defer retryWg.Done()
+				defer func() { <-retrySem }()
+
 				req, err := http.NewRequest(http.MethodGet, input.url, nil)
 				if err != nil {
 					fmt.Println("GET error:", err)
+					return
 				}
+				req.Header.Set("User-Agent", crawlerUserAgent)
 
-				req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
-				resp, err := retry_client.Do(req)
+				resp, err := retryClient.Do(req)
 				if err != nil {
 					fmt.Println(err)
-					request_errors = append(request_errors, RequestErrors{err: err, origin_url: input.origin_url, origin_text: input.origin_text})
+					mu.Lock()
+					requestErrors = append(requestErrors, RequestError{
+						err:        err,
+						originURL:  input.originURL,
+						originText: input.originText,
+					})
+					mu.Unlock()
+					return
 				}
-				if err == nil {
-					defer resp.Body.Close()
-					status = resp.StatusCode
-				}
-				is_ok := false
-				if status >= 200 && status <= 299 {
-					is_ok = true
-				}
-				fmt.Printf("GET response %d for %s\n", status, input.url)
-				crawled_urls = append(crawled_urls, CrawlResponse{origin_url: input.origin_url, origin_text: input.origin_text, url: input.url, status_code: status, is_ok: is_ok})
+				defer resp.Body.Close()
+
+				statusCode := resp.StatusCode
+				isOk := statusCode >= 200 && statusCode <= 299
+				fmt.Printf("GET response %d for %s\n", statusCode, input.url)
+
+				mu.Lock()
+				crawledURLs = append(crawledURLs, CrawlResponse{
+					originURL:  input.originURL,
+					originText: input.originText,
+					url:        input.url,
+					statusCode: statusCode,
+					isOk:       isOk,
+				})
+				mu.Unlock()
 			}(link)
 		}
-		for i := 0; i < concurrent_limit; i++ {
-			retry_queue <- true
+		retryWg.Wait()
+	}
+
+	var urlErrors []CrawlResponse
+	for _, item := range crawledURLs {
+		if !item.isOk {
+			urlErrors = append(urlErrors, item)
 		}
 	}
-	// Check number of errors
-	for _, item := range crawled_urls {
-		if !item.is_ok {
-			num_errors++
-			url_errors = append(url_errors, item)
-		}
-	}
+
+	return crawledURLs, urlErrors, requestErrors
 }
 
-// Function for checking unique URLs
-func isUniqueUrl(link_url string) bool {
-	for _, exists := range url_list {
-		// Check if url_list contains link_url and if so, return false for is_unique
-		if exists.url == link_url {
-			return false
-		}
-	}
-	return true
-}
-
-func isUniquePage(page_url string) bool {
-	for _, exists := range page_list {
-		if exists == page_url {
-			return false
-		}
-	}
-	return true
-}
-
-// Function for fetching URLs in a HTML page, returning a list
-// that can be crawled for status later
-func getPageLinks(input_url string) []Link {
-	// Parse input URL to URL object
-	parsed_entrypoint, _ := url.ParseRequestURI(input_url)
-	// Start up Colly
-	c := colly.NewCollector()
-	c.Limit(&colly.LimitRule{RandomDelay: 3 * time.Second})
-
-	c.OnHTML("a[href]", func(h *colly.HTMLElement) {
-		link_url := h.Attr("href")
-		link_text := strings.TrimSpace(h.Text)
-		parsed_url, _ := url.ParseRequestURI(link_url)
-		if parsed_url != nil {
-			// Check if URL has empty Scheme and if so, add base url from input
-			if parsed_url.Scheme == "" {
-				base_url := parsed_entrypoint.Scheme + "://" + parsed_entrypoint.Hostname()
-				link_url = base_url + link_url
-			}
-			// Remove all # content
-			trimmed_url1 := strings.Split(link_url, "#")
-			trimmed_url2 := strings.Split(trimmed_url1[0], "&")
-			// Check if URL is in list already
-			is_unique := isUniqueUrl(trimmed_url2[0])
-			if is_unique && parsed_url.Scheme != "mailto" && parsed_url.Scheme != "tel" && parsed_url.Scheme != "irc" && parsed_url.Scheme != "javascript" && parsed_url.Scheme != "skype" {
-				// Append link to slice that will be returned from function
-				url_list = append(url_list, Link{origin_url: input_url, origin_text: link_text, url: trimmed_url2[0]})
-			}
-		}
-	})
-
-	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Link scraping: ", r.URL.String())
-	})
-
-	c.Visit(input_url)
-
-	return url_list
-}
-
-// Function for listing URLs in sitemap, returning a list that
-// can be crawled for status later
-func getSitemap(entrypoint string) ([]string, error) {
-	res, err := getXML(entrypoint)
+// getPageLinks fetches a page and returns all unique HTTP(S) links found in it.
+func getPageLinks(inputURL string, client *http.Client) []Link {
+	parsedBase, err := url.Parse(inputURL)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Failed to parse URL %s: %v\n", inputURL, err)
+		return nil
+	}
+
+	fmt.Println("Link scraping:", inputURL)
+
+	req, err := http.NewRequest(http.MethodGet, inputURL, nil)
+	if err != nil {
+		fmt.Printf("Failed to create request for %s: %v\n", inputURL, err)
+		return nil
+	}
+	req.Header.Set("User-Agent", crawlerUserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Failed to fetch %s: %v\n", inputURL, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		fmt.Printf("Failed to parse HTML from %s: %v\n", inputURL, err)
+		return nil
+	}
+
+	var links []Link
+	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
+		linkURL, exists := s.Attr("href")
+		if !exists {
+			return
+		}
+		linkText := strings.TrimSpace(s.Text())
+
+		parsedLink, err := url.Parse(linkURL)
+		if err != nil {
+			return
+		}
+
+		// Resolve relative URLs against the page base
+		resolved := parsedBase.ResolveReference(parsedLink)
+
+		// Skip non-HTTP schemes (mailto:, tel:, javascript:, etc.)
+		if resolved.Scheme != "http" && resolved.Scheme != "https" {
+			return
+		}
+
+		// Strip fragments — #section links point to the same resource
+		resolved.Fragment = ""
+
+		links = append(links, Link{
+			originURL:  inputURL,
+			originText: linkText,
+			url:        resolved.String(),
+		})
+	})
+
+	return links
+}
+
+func getSitemap(entrypoint string, concurrentLimit int, timeout time.Duration) ([]string, error) {
+	res, err := getXML(entrypoint, timeout)
+	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to parse sitemap XML: %w", err)
 	}
-	return parseSitemap(*doc), nil
+
+	return parseSitemap(*doc, concurrentLimit, timeout), nil
 }
 
-func getXML(entrypoint string) (*http.Response, error) {
-	// Go fetch!
+func getXML(entrypoint string, timeout time.Duration) (*http.Response, error) {
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest(http.MethodGet, entrypoint, nil)
 	if err != nil {
-		fmt.Println(err)
-	}
-	req.Header.Set("User-Agent", CRAWLER_USER_AGENT)
-	res, err := client.Do(req)
-	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
-
-	return res, nil
+	req.Header.Set("User-Agent", crawlerUserAgent)
+	return client.Do(req)
 }
 
-func parseUrlset(doc goquery.Document) []string {
-	locations := []string{}
-	sel := doc.Find("loc")
-	for i := range sel.Nodes {
-		loc := sel.Eq(i)
-		result := loc.Text()
-		if isUniquePage(result) {
-			page_list = append(page_list, result)
-			locations = append(locations, result)
+// parseURLSet extracts all <loc> text values from a sitemap document.
+func parseURLSet(doc goquery.Document) []string {
+	var locations []string
+	doc.Find("loc").Each(func(_ int, s *goquery.Selection) {
+		if loc := strings.TrimSpace(s.Text()); loc != "" {
+			locations = append(locations, loc)
 		}
-	}
-
+	})
 	return locations
 }
 
-func parseSitemap(doc goquery.Document) []string {
-	// Check if sitemap file contains sitemap or url tags
+func parseSitemap(doc goquery.Document, concurrentLimit int, timeout time.Duration) []string {
 	if len(doc.Find("sitemap").Nodes) > 0 {
-		queue := make(chan bool, concurrent_limit)
-		sitemaps := parseUrlset(doc)
-		var pages []string
-		for _, entrypoint := range sitemaps {
-			queue <- true
-			go func(entrypoint string) {
-				defer func() { <-queue }()
-				result, err := getSitemap(entrypoint)
+		// Sitemap index: fetch each child sitemap concurrently
+		sitemapURLs := parseURLSet(doc)
+		var (
+			pages []string
+			mu    sync.Mutex
+			wg    sync.WaitGroup
+		)
+		sem := make(chan struct{}, concurrentLimit)
+
+		for _, ep := range sitemapURLs {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(ep string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				result, err := getSitemap(ep, concurrentLimit, timeout)
 				if err != nil {
 					fmt.Println(err)
+					return
 				}
+				mu.Lock()
 				pages = append(pages, result...)
-			}(entrypoint)
+				mu.Unlock()
+			}(ep)
 		}
-		for i := 0; i < concurrent_limit; i++ {
-			queue <- true
+		wg.Wait()
+
+		// Deduplicate across child sitemaps
+		seen := make(map[string]bool)
+		deduped := make([]string, 0, len(pages))
+		for _, p := range pages {
+			if !seen[p] {
+				seen[p] = true
+				deduped = append(deduped, p)
+			}
 		}
-		return pages
+		return deduped
 	} else if len(doc.Find("url").Nodes) > 0 {
-		pages := parseUrlset(doc)
-		return pages
-	} else {
-		fmt.Println("Empty result")
-		return nil
+		return parseURLSet(doc)
 	}
+
+	fmt.Println("Empty result")
+	return nil
 }
