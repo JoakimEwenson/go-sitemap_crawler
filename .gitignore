@@ -28,6 +28,9 @@ go.work
 # macOS Finder
 .DS_Store
 
-# Executables
-*.exe
+# Executables and compressed files
 sitemap_crawler
+*.exe
+*.zip
+*.7z
+*.rar
