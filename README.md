@@ -4,10 +4,16 @@ This is a really simple link crawler for pages with sitemap.xml available.
 ## What is it good for
 Have you ever come across a 404 link on some blog? Maybee want to verify that all links on your blog is active and working? Well, then this is one way to go look for broken links.
 
-## How to use it
+## How to use
+1. Download the latest release from Releases, pick the version that fits your platform.
+2. Make it executable (Linux/macOS) by running `chmod +x sitemap_crawler-XYZ`
+3. If you are using macOS, you also need to remove the Apple quarantine from the file, you can do so by running `xattr -d com.apple.quarantine ./sitemap_crawler-macos-arm64` (please note that this is in fact a security risk...)
+
+## How to use it from source
 1. Clone or download and unzip to your location of choice
 2. Navigate to folder and run `go run . https://example.com/sitemap.xml`
 3. Need help or curious about available flags? Run `go run . -h`
+4. Want to build it? Just run `go build` and it should sort itself out
 
 ## What it does
 1. The file reads sitemap.xml and collect all `<loc>` elements and the link inside. If the sitemap.xml contains a sitemap index, it will crawl the index and fetch links from all sitemaps linked.
@@ -17,4 +23,4 @@ Have you ever come across a 404 link on some blog? Maybee want to verify that al
 5. It will then get the HTTP status code from that request and save those with a 3xx, 4xx or 5xx responses for displaying and log output later.
 
 ## Known issues
-This script needs some limits. Running it on large sitemaps will probabably cause errors due to too many goroutines launching. This is on the to do list for a rainy day. 
+This script needs some limits. Running it on large sitemaps will probabably cause errors due to too many goroutines launching. This is on the to do list for a rainy day.
