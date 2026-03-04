@@ -12,21 +12,24 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.asset_name }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
         include:
           - os: darwin
             arch: arm64
+            runner: macos-latest
             suffix: ""
             asset_name: sitemap_crawler-macos-arm64
           - os: linux
             arch: amd64
+            runner: ubuntu-latest
             suffix: ""
             asset_name: sitemap_crawler-linux-x86_64
           - os: windows
             arch: amd64
+            runner: ubuntu-latest
             suffix: ".exe"
             asset_name: sitemap_crawler-windows-x86_64
 
@@ -47,6 +50,10 @@ jobs:
         run: |
           go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o ${{ matrix.asset_name }}${{ matrix.suffix }} .
+
+      - name: Ad-hoc sign (macOS)
+        if: matrix.os == 'darwin'
+        run: codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime ${{ matrix.asset_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
